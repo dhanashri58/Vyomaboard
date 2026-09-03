@@ -1,0 +1,1 @@
+const cp = require('child_process'); cp.exec('"C:\\Program Files\\LibreOffice\\program\\soffice.exe" --headless --help', (err, stdout, stderr) => { console.log('err:', err); console.log('stdout:', stdout); });
