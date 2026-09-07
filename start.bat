@@ -18,7 +18,7 @@ echo [3/3] Starting Servers...
 set BACKEND_PORT=3002
 echo Starting backend on port %BACKEND_PORT% and frontend on port 5173...
 
-start cmd /k "cd backend && set YPERSISTENCE=./ydb&& npm start"
+start cmd /k "cd backend && npm start"
 start cmd /k "npm run dev"
 
 echo.

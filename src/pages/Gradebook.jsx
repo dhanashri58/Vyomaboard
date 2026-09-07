@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { ArrowLeft, Download, Trash2, CheckCircle2, Clock } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { buildMasterRows } from '../lib/examProfile';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 export default function Gradebook() {
   const { id } = useParams();
@@ -19,14 +19,13 @@ export default function Gradebook() {
   const loadSubmissions = async () => {
     setLoading(true);
     try {
-      const roomRef = doc(db, 'rooms', id);
-      const roomSnap = await getDoc(roomRef);
-      if (roomSnap.exists()) setRoomInfo(roomSnap.data());
+      const roomRes = await fetch(`/api/rooms/${id}`);
+      const roomData = await roomRes.json();
+      if (roomData.success) setRoomInfo(roomData.room?.meta || roomData.room);
 
-      const subsRef = collection(db, 'rooms', id, 'submissions');
-      const subsSnap = await getDocs(subsRef);
-      const rows = [];
-      subsSnap.forEach(sd => rows.push({ uid: sd.id, ...sd.data() }));
+      const subRes = await fetch(`/api/submissions/${id}`, { headers: apiAuth() });
+      const subData = await subRes.json();
+      const rows = (subData.submissions || []);
       rows.sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || ''));
       setSubmissions(rows);
     } catch (e) {
@@ -53,13 +52,9 @@ export default function Gradebook() {
     const updated = { ...sub, answers, totalMarks, obtainedMarks, pendingManual, status: pendingManual > 0 ? 'submitted' : 'graded' };
 
     try {
-      const subRef = doc(db, 'rooms', id, 'submissions', sub.uid);
-      await updateDoc(subRef, {
-        answers,
-        totalMarks,
-        obtainedMarks,
-        pendingManual,
-        status: pendingManual > 0 ? 'submitted' : 'graded'
+      await fetch(`/api/submissions/${id}/${sub.uid}`, {
+        method: 'PATCH', headers: apiAuth(),
+        body: JSON.stringify({ answers, totalMarks, obtainedMarks, pendingManual, status: pendingManual > 0 ? 'submitted' : 'graded' })
       });
       setSubmissions(prev => prev.map(s => s.uid === sub.uid ? updated : s));
       setGrading(prev => { const c = { ...prev }; delete c[`${sub.uid}:${shapeId}`]; return c; });
@@ -74,7 +69,7 @@ export default function Gradebook() {
   const deleteSubmission = async (sub) => {
     if (!window.confirm(`Delete ${sub.studentName}'s submission?`)) return;
     try {
-      await deleteDoc(doc(db, 'rooms', id, 'submissions', sub.uid));
+      await fetch(`/api/submissions/${id}/${sub.uid}`, { method: 'DELETE', headers: apiAuth() });
       setSubmissions(prev => prev.filter(s => s.uid !== sub.uid));
     } catch (e) {
       alert('Failed to delete: ' + e.message);

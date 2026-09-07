@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db } from '../firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ArrowLeft, Save, Plus, Trash2, GripVertical, Settings } from 'lucide-react';
 import '../index.css';
 
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 const ID = () => Math.random().toString(36).substring(2, 10);
 
 export default function ExamEditor() {
@@ -18,11 +17,12 @@ export default function ExamEditor() {
   useEffect(() => {
     const load = async () => {
       try {
-        const snap = await getDoc(doc(db, 'rooms', id));
-        if (snap.exists()) {
-          const data = snap.data();
-          setExamConfig(data.exam || {});
-          setQuestions(data.exam?.questions || []);
+        const res = await fetch(`/api/rooms/${id}`);
+        const data = await res.json();
+        if (data.success && data.room) {
+          const examData = data.room?.meta?.exam || {};
+          setExamConfig(examData);
+          setQuestions(examData.questions || []);
         } else {
           alert('Exam not found!');
           navigate('/exams');
@@ -39,8 +39,9 @@ export default function ExamEditor() {
   const save = async () => {
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'rooms', id), {
-        'exam.questions': questions
+      await fetch(`/api/rooms/${id}`, {
+        method: 'PATCH', headers: apiAuth(),
+        body: JSON.stringify({ exam: { ...examConfig, questions } })
       });
       alert('Saved successfully!');
     } catch (e) {

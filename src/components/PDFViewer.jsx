@@ -3,8 +3,6 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { ChevronLeft, ChevronRight, X, Cloud, Loader2 } from 'lucide-react';
-import { storage } from '../firebase';
-import { ref, uploadBytes, uploadString, getDownloadURL } from 'firebase/storage';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -38,25 +36,32 @@ export default function PDFViewer({ fileData, onClose, onToggleFullscreen, isFul
     try {
       setUploadingToCloud(true);
       const filename = fileData.name || 'document.pdf';
-      const path = `pdfs/${Date.now()}_${filename}`;
-      const storageRef = ref(storage, path);
       
+      let blob;
       if (fileData.url.startsWith('data:')) {
-        await uploadString(storageRef, fileData.url, 'data_url');
+        const res = await fetch(fileData.url);
+        blob = await res.blob();
       } else {
         const res = await fetch(fileData.url);
-        const blob = await res.blob();
-        await uploadBytes(storageRef, blob);
+        blob = await res.blob();
       }
       
-      const publicUrl = await getDownloadURL(storageRef);
+      const form = new FormData();
+      form.append('file', blob, filename);
+      const uploadRes = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` },
+        body: form
+      });
+      const data = await uploadRes.json();
+      if (!data.success) throw new Error(data.error || 'Upload failed');
+      
+      const publicUrl = data.url;
       fileData.url = publicUrl;
-      if (onSaveToCloudSuccess) {
-        onSaveToCloudSuccess(publicUrl);
-      }
+      if (onSaveToCloudSuccess) onSaveToCloudSuccess(publicUrl);
     } catch (err) {
-      console.error("Failed to upload to cloud:", err);
-      alert("Failed to upload to cloud: " + err.message);
+      console.error('Failed to upload to server:', err);
+      alert('Failed to upload to server: ' + err.message);
     } finally {
       setUploadingToCloud(false);
     }

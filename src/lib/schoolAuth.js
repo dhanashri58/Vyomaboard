@@ -1,16 +1,9 @@
 // Per-school authentication configuration.
-// Schools identify themselves (subdomain / ?school= param / dropdown) and we
-// fetch their auth config from Firestore schools/{schoolId}. The config lists
-// which sign-in methods to show and in what ORDER.
+// Local-first: no Firestore. School config is not used in local mode.
+// All sign-in goes through the local backend SQLite database.
 
-import { doc, getDoc, getDocs, collection } from 'firebase/firestore';
-import { db } from '../firebase';
+export const DEFAULT_METHOD_ORDER = ['account'];
 
-// Canonical precedence when a school doesn't override it:
-// SQLite accounts first, then enterprise SSO, then Google Workspace, then email, then no-account.
-export const DEFAULT_METHOD_ORDER = ['account', 'sso', 'google', 'email', 'no-account'];
-
-// Resolve the school id from, in order: URL param, subdomain, saved value.
 export function resolveSchoolId() {
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get('school');
@@ -25,35 +18,24 @@ export function saveSchoolId(id) {
   if (id) localStorage.setItem('schoolId', id);
 }
 
+// Local-first: no Firestore school config. Returns null always.
 export async function getSchoolConfig(schoolId) {
-  if (!schoolId) return null;
-  try {
-    const snap = await getDoc(doc(db, 'schools', schoolId));
-    if (snap.exists()) return { id: schoolId, ...snap.data() };
-  } catch (e) {
-    console.error('Failed to load school config', e);
-  }
   return null;
 }
 
+// Local-first: no Firestore school listing.
 export async function listSchools() {
-  try {
-    const snap = await getDocs(collection(db, 'schools'));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  } catch (e) {
-    console.error('Failed to list schools', e);
-    return [];
-  }
+  return [];
 }
 
-// Global fallback when no school doc exists.
+// Only local account sign-in is supported.
 export function globalAuthMethods() {
-  return import.meta.env.VITE_AUTH_MODE === 'school' ? ['account', 'no-account'] : ['account', 'google', 'email'];
+  return ['account'];
 }
 
 export function methodLabel(method) {
   switch (method) {
-    case 'account': return 'School Account (Username)';
+    case 'account': return 'Local Account (Email / Username)';
     case 'sso': return 'School SSO (SAML / OIDC)';
     case 'google': return 'Continue with Google Workspace';
     case 'microsoft': return 'Continue with Microsoft / Entra';
@@ -65,8 +47,8 @@ export function methodLabel(method) {
 
 export function methodHint(method) {
   switch (method) {
-    case 'account': return 'Sign in with your school account stored in the backend database. Ask the admin if you don\u2019t have one yet.';
-    case 'no-account': return 'No sign-in needed — used by schools without per-student accounts. Results are matched by your exam profile (designation, domain, year, division, roll no).';
+    case 'account': return 'Sign in with your local account email and password stored in the backend database.';
+    case 'no-account': return 'No sign-in needed — used by schools without per-student accounts.';
     case 'sso': return 'Authenticates with your school identity provider.';
     case 'microsoft': return 'Authenticates with your Microsoft school account.';
     case 'google': return 'Authenticates with your school Google account.';

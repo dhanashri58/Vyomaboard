@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Layout, Plus, LogIn, Settings, Hash, Search, Trash, LogOut, GraduationCap } from 'lucide-react';
-import { auth, db } from '../firebase';
-import { signOut } from 'firebase/auth';
-import { doc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import '../index.css';
 import ConfirmDeleteRoomModal from '../components/ConfirmDeleteRoomModal';
 import { isTeacherCreatedRoom, isAssignedTeacher } from '../lib/classMeta';
 import { loadRoomHistory, saveRoomHistory, addRoomToHistory } from '../lib/roomHistory';
+
+const apiHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+});
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -57,29 +59,21 @@ export default function Dashboard() {
         finalName = untitledCount === 0 ? 'New Board' : `New Board ${untitledCount}`;
       }
 
-      const newRoomId = Math.random().toString(36).substring(2, 8) + '-' + Math.random().toString(36).substring(2, 8);
-      const roomRef = doc(db, 'rooms', newRoomId);
-
-      await setDoc(roomRef, {
-        name: finalName,
-        kind: 'board',
-        hostId: userId,
-        hostName: displayName,
-        createdBy: userId,
-        createdByRole: userRole,
-        roles: { [userId]: 'admin' },
-        createdAt: serverTimestamp(),
-        parentId: null // Root level board
+      const res = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ name: finalName, hostId: userId, hostName: displayName, kind: 'board', parentId: null })
       });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to create room');
 
+      const newRoomId = data.roomId;
       const newRoomData = { id: newRoomId, name: finalName, hostId: userId, parentId: null, kind: 'board' };
       let current = loadRoomHistory();
       const updatedHistory = [newRoomData, ...current];
       saveRoomHistory(updatedHistory);
       setRoomHistory(updatedHistory);
       setNewRoomName('');
-
-      // Open the new board directly in the whiteboard
       navigate(`/board/${newRoomId}`);
     } catch (e) {
       alert('Error creating board: ' + e.message);
@@ -94,52 +88,21 @@ const leaveRoom = (room) => {
 
   const handleDeleteRoom = async (room, e) => {
     e.stopPropagation();
-    if (room.hostId !== userId) {
-      // Not the creator as far as local history knows — check the real room doc.
-      try {
-        const snap = await getDoc(doc(db, 'rooms', room.id));
-        const data = snap.exists() ? snap.data() : null;
-        if (data && isTeacherCreatedRoom(data) && isAssignedTeacher(data, userId)) {
-          setConfirmDelete({ id: room.id, ...data });
-          return;
-        }
-        if (data && data.hostId === userId && !isTeacherCreatedRoom(data)) {
-          if (window.confirm(`You are the host of ${room.name}. This will permanently delete the room for everyone. Are you sure?`)) {
-            await deleteDoc(doc(db, 'rooms', room.id));
-          } else {
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('Could not verify room, leaving only', err);
-      }
+    if (room.hostId && room.hostId !== userId) {
+      // Not the creator — just remove from local history
       leaveRoom(room);
       return;
     }
 
-    // Local history says we are the host. Verify against Firestore.
-    try {
-      const snap = await getDoc(doc(db, 'rooms', room.id));
-      const data = snap.exists() ? snap.data() : null;
-      if (data && isTeacherCreatedRoom(data)) {
-        if (isAssignedTeacher(data, userId)) {
-          setConfirmDelete({ id: room.id, ...data });
-        } else {
-          leaveRoom(room);
-        }
-        return;
-      }
-    } catch (err) {
-      console.warn('Could not verify room, using local delete', err);
-    }
-
-    if (window.confirm(`You are the host of ${room.name}. This will permanently delete the room for everyone. Are you sure?`)) {
+    if (window.confirm(`You are the host of "${room.name}". This will permanently delete the room. Are you sure?`)) {
       try {
-        const roomRef = doc(db, 'rooms', room.id);
-        await deleteDoc(roomRef);
+        const res = await fetch(`/api/rooms/${room.id}`, { method: 'DELETE', headers: apiHeaders() });
+        const data = await res.json();
+        if (!data.success && res.status !== 400) throw new Error(data.error || 'Delete failed');
         leaveRoom(room);
       } catch (e) {
-        alert('Error deleting room: ' + e.message);
+        // Force local removal even if backend delete fails (room may already not exist)
+        leaveRoom(room);
       }
     }
   };
@@ -147,7 +110,7 @@ const leaveRoom = (room) => {
   const confirmPermanentDelete = async () => {
     if (!confirmDelete) return;
     try {
-      await deleteDoc(doc(db, 'rooms', confirmDelete.id));
+      await fetch(`/api/rooms/${confirmDelete.id}`, { method: 'DELETE', headers: apiHeaders() });
       leaveRoom(confirmDelete);
       setConfirmDelete(null);
       alert('Room permanently deleted.');
@@ -162,12 +125,10 @@ const leaveRoom = (room) => {
     if (roomCode.trim()) {
       const formattedRoom = roomCode.trim().replace(/\s+/g, '-').toLowerCase();
       try {
-        const roomRef = doc(db, 'rooms', formattedRoom);
-        const roomSnap = await getDoc(roomRef);
-        
-        if (roomSnap.exists()) {
-          const data = roomSnap.data();
-          saveToHistory(formattedRoom, data.name, data.parentId || null);
+        const res = await fetch(`/api/rooms/${formattedRoom}`);
+        const data = await res.json();
+        if (data.success && data.room) {
+          saveToHistory(formattedRoom, data.room.name, data.room.parentId || null);
           navigate(`/board/${formattedRoom}`);
         } else {
           alert('Room not found! Please check the ID and try again.');
@@ -178,12 +139,7 @@ const leaveRoom = (room) => {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (e) {
-      console.error("Firebase signout error", e);
-    }
+  const handleLogout = () => {
     localStorage.removeItem('userName');
     localStorage.removeItem('token');
     localStorage.removeItem('userEmail');

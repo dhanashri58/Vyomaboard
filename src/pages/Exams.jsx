@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, setDoc, serverTimestamp, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
 import { ArrowLeft, Plus, CalendarClock, Play, PencilRuler, Table2, BarChart3, X, GraduationCap } from 'lucide-react';
 import { loadRoomHistory, addRoomToHistory } from '../lib/roomHistory';
 import { loadProfile, loadCustomFields } from '../lib/examProfile';
@@ -9,6 +7,8 @@ import { classMetaLabel, isLabLike, isTeacherRole, isAssignedTeacher } from '../
 import { YEARS, DOMAINS, DIVISIONS, CLASS_TYPES } from '../lib/classMeta';
 import ExamScheduleModal from '../components/ExamScheduleModal';
 import '../index.css';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 const userId = () => localStorage.getItem('userId') || '';
 const userRole = () => localStorage.getItem('userRole') || 'Casual';
@@ -28,36 +28,29 @@ export default function Exams() {
     const map = {};
     const history = loadRoomHistory().filter(r => r.kind === 'exam');
 
-    // 1. Rooms the user knows about (local history).
-    for (const h of history) {
+    // Load exam rooms from local history via the backend API
+    await Promise.all(history.map(async h => {
       try {
-        const snap = await getDoc(doc(db, 'rooms', h.id));
-        if (snap.exists()) map[h.id] = snap.data();
+        const res = await fetch(`/api/rooms/${h.id}`);
+        const data = await res.json();
+        if (data.success && data.room) map[h.id] = { ...data.room.meta, ...data.room };
       } catch (e) { /* ignore */ }
-    }
-
-    // 2. Best-effort discovery query (works if Firestore rules allow collection queries).
-    try {
-      const q = query(collection(db, 'rooms'), where('kind', '==', 'exam'));
-      const qs = await getDocs(q);
-      qs.forEach(sd => { if (!map[sd.id]) map[sd.id] = sd.data(); });
-    } catch (e) {
-      console.warn('Exam discovery query unavailable, using local history only', e);
-    }
+    }));
 
     const ids = Object.keys(map);
     setRooms(ids.map(id => ({ id, doc: map[id] })));
 
-    // Submission state for the current user + counts for teachers.
+    // Submission state
     const me = userId();
     const subs = {};
     const counts = {};
     await Promise.all(ids.map(async (id) => {
       try {
-        const subSnap = await getDoc(doc(db, 'rooms', id, 'submissions', me));
-        subs[id] = subSnap.exists();
-        const coll = await getDocs(collection(db, 'rooms', id, 'submissions'));
-        counts[id] = coll.size;
+        const subRes = await fetch(`/api/submissions/${id}/${me}`);
+        subs[id] = subRes.ok && (await subRes.json()).success;
+        const cntRes = await fetch(`/api/submissions/${id}`, { headers: apiAuth() });
+        const cntData = await cntRes.json();
+        counts[id] = (cntData.submissions || []).length;
       } catch (e) { /* ignore */ }
     }));
     setSubmitted(subs);
@@ -101,7 +94,6 @@ export default function Exams() {
   const list = rooms.filter(visible);
 
   const createExam = async (form) => {
-    const newId = Math.random().toString(36).substring(2, 8) + '-' + Math.random().toString(36).substring(2, 8);
     const cm = {
       year: form.year, branch: form.branch,
       subject: form.subject.trim(), courseCode: form.courseCode.trim() || form.subject.trim(),
@@ -110,21 +102,21 @@ export default function Exams() {
     if (isLabLike(form)) { cm.batches = form.batches; cm.batch = form.batch || (form.batches[0] || ''); }
     else cm.division = form.division;
 
-    await setDoc(doc(db, 'rooms', newId), {
-      name: form.title.trim() || 'Untitled Exam',
-      kind: 'exam',
-      hostId: userId(),
-      hostName: userName(),
-      createdBy: userId(),
-      createdByRole: role,
-      roles: { [userId()]: 'admin' },
-      classMeta: cm,
-      exam: { title: form.title.trim() || 'Untitled Exam', durationMinutes: Number(form.duration) || 45, enabled: false, authFields: [] },
-      createdAt: serverTimestamp(),
-      parentId: null
+    const title = form.title.trim() || 'Untitled Exam';
+    const res = await fetch('/api/rooms', {
+      method: 'POST', headers: apiAuth(),
+      body: JSON.stringify({
+        name: title, kind: 'exam', hostId: userId(), hostName: userName(), parentId: null,
+        meta: {
+          classMeta: cm,
+          exam: { title, durationMinutes: Number(form.duration) || 45, enabled: false, authFields: [] }
+        }
+      })
     });
-    addRoomToHistory(newId, form.title.trim() || 'Untitled Exam', null, 'exam');
-    navigate(`/exam-editor/${newId}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to create exam');
+    addRoomToHistory(data.roomId, title, null, 'exam');
+    navigate(`/exam-editor/${data.roomId}`);
   };
 
   const NewExamForm = () => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, CalendarClock } from 'lucide-react';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 export default function ExamScheduleModal({ roomId, onClose }) {
   const [title, setTitle] = useState('');
@@ -14,9 +14,9 @@ export default function ExamScheduleModal({ roomId, onClose }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const roomRef = doc(db, 'rooms', roomId);
-        const snap = await getDoc(roomRef);
-        const exam = snap.exists() ? snap.data().exam : null;
+        const res = await fetch(`/api/rooms/${roomId}`);
+        const data = await res.json();
+        const exam = data.success ? (data.room?.meta?.exam || null) : null;
         if (exam) {
           setTitle(exam.title || '');
           setDuration(exam.durationMinutes || 45);
@@ -42,8 +42,10 @@ export default function ExamScheduleModal({ roomId, onClose }) {
       updatedAt: new Date().toISOString()
     };
     try {
-      const roomRef = doc(db, 'rooms', roomId);
-      await setDoc(roomRef, { exam }, { merge: true });
+      await fetch(`/api/rooms/${roomId}`, {
+        method: 'PATCH', headers: apiAuth(),
+        body: JSON.stringify({ exam })
+      });
       alert('Exam scheduled! Students can now take it at /exam/' + roomId);
       onClose();
     } catch (e) {

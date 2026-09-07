@@ -4,7 +4,7 @@ import * as mammoth from 'mammoth/mammoth.browser.js';
 import * as XLSX from 'xlsx';
 import DOMPurify from 'dompurify';
 import { storage } from './firebase';
-import { ref, uploadString, uploadBytes } from 'firebase/storage';
+// Firebase storage removed — uploads use local backend /api/upload
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import SpreadsheetIDE from './components/SpreadsheetIDE';

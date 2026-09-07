@@ -30,8 +30,11 @@ import 'tldraw/tldraw.css';
 import { Loader2, Type, CheckSquare, Image as ImageIcon, Layout, Terminal, Settings, Folder, FileCode, Phone, MessageSquare, Mic, Video, VideoOff, MicOff, Pin, PieChart, Sparkles, Pen, Square } from 'lucide-react';
 import { NOTE_COLORS } from '../shapes/ShapeColors';
 import { db, storage } from '../firebase';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+// Local API helper
+const apiHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+});
 import { CardShapeUtil } from '../shapes/CardShapeUtil';
 import { ListShapeUtil } from '../shapes/ListShapeUtil';
 import { FileShapeUtil } from '../shapes/FileShapeUtil';
@@ -769,20 +772,20 @@ export default function Board() {
     if (id) {
       const fetchRoom = async () => {
         try {
-          const roomRef = doc(db, 'rooms', id);
-          const roomSnap = await getDoc(roomRef);
-          if (roomSnap.exists()) {
-            const data = roomSnap.data();
-            setRoomInfo(data);
-            window['currentRoomHostId'] = data.hostId;
-            addRoomToHistory(id, data.name, data.parentId || null, data.kind || 'board');
+          const res = await fetch(`/api/rooms/${id}`);
+          const data = await res.json();
+          if (data.success && data.room) {
+            const room = data.room;
+            setRoomInfo(room);
+            window['currentRoomHostId'] = room.hostId;
+            addRoomToHistory(id, room.name, room.parentId || null, room.kind || 'board');
           } else {
-            console.warn("Room doesn't exist in Firebase, falling back to local mode");
+            console.warn("Room doesn't exist in backend, falling back to local mode");
             setRoomInfo({ name: id, hostId: 'local' });
             window['currentRoomHostId'] = 'local';
           }
         } catch (e) {
-          console.error("Firebase error, falling back to local mode:", e);
+          console.error("Backend error, falling back to local mode:", e);
           setRoomInfo({ name: id, hostId: 'local' });
           window['currentRoomHostId'] = 'local';
         }
@@ -838,15 +841,15 @@ export default function Board() {
           if (connectionTimesRef.current[uid] >= 900 && !autoMarkedRef.current.has(uid)) {
             autoMarkedRef.current.add(uid);
             
-            // Auto-mark in Firebase
+            // Auto-mark in local SQLite via API
             const todayKey = new Date().toISOString().slice(0, 10);
-            const attRef = doc(db, 'rooms', id, 'attendance', todayKey);
-            getDoc(attRef).then(snap => {
-              const data = snap.exists() ? snap.data().students || {} : {};
-              if (!data[uid]) {
-                data[uid] = { name: state.presence.userName || uid, manual: false, auto: true };
-                setDoc(attRef, { date: todayKey, students: data, updatedAt: new Date().toISOString() }, { merge: true });
-              }
+            const token = localStorage.getItem('token');
+            fetch(`/api/attendance/${id}/${todayKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token || ''}` },
+              body: JSON.stringify({
+                students: { [uid]: { name: state.presence.userName || uid, auto: true, manual: false } }
+              })
             }).catch(console.error);
           }
         }

@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { UploadCloud, FileJson, FileCode2, FileType2, X } from 'lucide-react';
-import { db } from '../firebase';
-import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import '../index.css';
 
 export default function ChoiceFileModal({ onClose, onFileSelect, onFileUpload }) {
@@ -10,31 +8,16 @@ export default function ChoiceFileModal({ onClose, onFileSelect, onFileUpload })
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchRecentFiles = async () => {
-      const userEmail = localStorage.getItem('userEmail');
-      if (!userEmail) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const q = query(
-          collection(db, 'users', userEmail, 'recentFiles'),
-          orderBy('timestamp', 'desc'),
-          limit(10)
-        );
-        const querySnapshot = await getDocs(q);
-        const files = [];
-        querySnapshot.forEach((doc) => {
-          files.push({ id: doc.id, ...doc.data() });
-        });
-        setRecentFiles(files);
-      } catch (err) {
-        console.error("Error fetching recent files", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchRecentFiles();
+    // Load recent files from localStorage (local-first)
+    try {
+      const raw = localStorage.getItem('recentFiles');
+      const files = raw ? JSON.parse(raw) : [];
+      setRecentFiles(files.slice(0, 10));
+    } catch (e) {
+      setRecentFiles([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const handleDragOver = (e) => {

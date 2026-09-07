@@ -43,12 +43,19 @@ export default function Auth() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password })
-      });
+      }).catch(() => null);
+
+      if (!res) {
+        throw new Error('Cannot connect to backend server. Make sure the backend is running (run start.bat).');
+      }
+
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.error || 'Login failed');
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Login failed (${res.status}: ${res.statusText || 'Server Error'})`);
+      }
       applySession(data);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -67,12 +74,19 @@ export default function Auth() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), email: email.trim(), password, role })
-      });
+      }).catch(() => null);
+
+      if (!res) {
+        throw new Error('Cannot connect to backend server. Make sure the backend is running (run start.bat).');
+      }
+
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.error || 'Sign up failed');
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Sign up failed (${res.status}: ${res.statusText || 'Server Error'})`);
+      }
       applySession(data);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Sign up failed. Please try again.');
     } finally {
       setLoading(false);
     }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, Plus, Trash2, UserRound, Type, Hash, AtSign, List, ChevronDown } from 'lucide-react';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 const FIELD_TYPES = [
   { id: 'text', label: 'Text Box', icon: Type },
@@ -23,8 +23,9 @@ export default function AuthFieldsEditorModal({ roomId, onClose }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const snap = await getDoc(doc(db, 'rooms', roomId));
-        const exam = snap.exists() ? snap.data().exam : null;
+        const res = await fetch(`/api/rooms/${roomId}`);
+        const data = await res.json();
+        const exam = data.success ? (data.room?.meta?.exam || null) : null;
         setFields((exam && Array.isArray(exam.authFields)) ? exam.authFields : []);
       } catch (e) {
         console.error('Failed to load auth fields', e);
@@ -69,7 +70,11 @@ export default function AuthFieldsEditorModal({ roomId, onClose }) {
       }));
     setSaving(true);
     try {
-      await setDoc(doc(db, 'rooms', roomId), { exam: { authFields: clean } }, { merge: true });
+      await fetch(`/api/rooms/${roomId}`, {
+        method: 'PATCH',
+        headers: apiAuth(),
+        body: JSON.stringify({ exam: { authFields: clean } })
+      });
       onClose();
     } catch (e) {
       alert('Failed to save form fields: ' + e.message);

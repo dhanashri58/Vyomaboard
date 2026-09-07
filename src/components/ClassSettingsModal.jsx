@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, Save, GraduationCap } from 'lucide-react';
 import { YEARS, DOMAINS, DIVISIONS, CLASS_TYPES, isLabLike } from '../lib/classMeta';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 export default function ClassSettingsModal({ roomId, onClose }) {
   const [form, setForm] = useState({
@@ -16,8 +16,9 @@ export default function ClassSettingsModal({ roomId, onClose }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const snap = await getDoc(doc(db, 'rooms', roomId));
-        const cm = snap.exists() ? (snap.data().classMeta || {}) : {};
+        const res = await fetch(`/api/rooms/${roomId}`);
+        const data = await res.json();
+        const cm = data.success ? (data.room?.meta?.classMeta || {}) : {};
         setForm({
           year: cm.year || '',
           branch: cm.branch || '',
@@ -76,27 +77,29 @@ export default function ClassSettingsModal({ roomId, onClose }) {
     classMeta.assignedTeachers = form.assignedTeachersText.split(',').map(s => s.trim()).filter(Boolean);
 
     try {
-      const roomRef = doc(db, 'rooms', roomId);
-      await setDoc(roomRef, { classMeta }, { merge: true });
+      // Save classMeta
+      await fetch(`/api/rooms/${roomId}`, {
+        method: 'PATCH', headers: apiAuth(),
+        body: JSON.stringify({ classMeta })
+      });
 
       if (labLike) {
         // Auto-sync a required "Batch" dropdown into the exam's student form.
-        const snap = await getDoc(roomRef);
-        const room = snap.exists() ? snap.data() : {};
+        const snap = await fetch(`/api/rooms/${roomId}`).then(r => r.json());
+        const room = snap.success ? (snap.room?.meta || {}) : {};
         const authFields = Array.isArray(room.exam?.authFields) ? room.exam.authFields : [];
         const existing = authFields.find(f => f.label === 'Batch');
         const batchField = {
-          id: 'batch',
-          label: 'Batch',
-          type: 'select',
-          required: true,
-          placeholder: 'Select your batch',
-          options: batches()
+          id: 'batch', label: 'Batch', type: 'select', required: true,
+          placeholder: 'Select your batch', options: batches()
         };
         const nextFields = existing
           ? authFields.map(f => f.id === 'batch' ? { ...f, ...batchField } : f)
           : [...authFields, batchField];
-        await setDoc(roomRef, { exam: { ...(room.exam || {}), authFields: nextFields } }, { merge: true });
+        await fetch(`/api/rooms/${roomId}`, {
+          method: 'PATCH', headers: apiAuth(),
+          body: JSON.stringify({ exam: { ...(room.exam || {}), authFields: nextFields } })
+        });
       }
 
       alert('Class settings saved.');

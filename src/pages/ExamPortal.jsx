@@ -1,8 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CalculatorShapeUtil } from '../shapes/CalculatorShapeUtil';
-import { db } from '../firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { extractQuestions, gradeSubmission } from '../lib/grading';
 import { resetExamSession, getExamAnswers } from '../lib/examSession';
 import { loadProfile, loadCustomFields } from '../lib/examProfile';
@@ -69,18 +67,18 @@ export default function ExamPortal() {
       let config = null;
       let submission = null;
       try {
-        const roomRef = doc(db, 'rooms', id);
-        const roomSnap = await getDoc(roomRef);
-        if (roomSnap.exists()) {
-          config = roomSnap.data().exam || { title: `Exam: ${id}`, durationMinutes: 0 };
+        const roomRes = await fetch(`/api/rooms/${id}`);
+        const roomData = await roomRes.json();
+        if (roomData.success && roomData.room) {
+          config = roomData.room?.meta?.exam || { title: `Exam: ${id}`, durationMinutes: 0 };
         } else {
           config = { title: `Exam: ${id}`, durationMinutes: 0 };
         }
 
-        const subRef = doc(db, 'rooms', id, 'submissions', userId);
-        const subSnap = await getDoc(subRef);
-        if (subSnap.exists()) {
-          submission = subSnap.data();
+        const subRes = await fetch(`/api/submissions/${id}/${userId}`);
+        if (subRes.ok) {
+          const subData = await subRes.json();
+          if (subData.success) submission = subData.submission;
         }
       } catch (e) {
         console.error('Failed to load exam config', e);
@@ -103,7 +101,7 @@ export default function ExamPortal() {
       } else if (closeAt && now > closeAt) {
         setScreen('closed');
       } else {
-        setScreen('ready'); // fullscreen gate before the exam actually begins
+        setScreen('ready');
       }
     };
     loadConfig();
@@ -162,8 +160,11 @@ export default function ExamPortal() {
     };
 
     try {
-      const subRef = doc(db, 'rooms', id, 'submissions', userId);
-      await setDoc(subRef, submission);
+      await fetch(`/api/submissions/${id}/${userId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(submission)
+      });
       exitFullscreen();
       setSubmissionResult(submission);
       setScreen('submitted');

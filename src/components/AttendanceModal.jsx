@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, UserCheck, Clock } from 'lucide-react';
 
 const todayKey = () => new Date().toISOString().slice(0, 10);
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 export default function AttendanceModal({ roomId, provider, onClose }) {
   const [todayAttendance, setTodayAttendance] = useState(null);
@@ -13,19 +12,13 @@ export default function AttendanceModal({ roomId, provider, onClose }) {
 
   const load = async () => {
     try {
-      const attRef = doc(db, 'rooms', roomId, 'attendance', todayKey());
-      const attSnap = await getDoc(attRef);
-      setTodayAttendance(attSnap.exists() ? attSnap.data().students || {} : {});
+      const todayRes = await fetch(`/api/attendance/${roomId}/${todayKey()}`, { headers: apiAuth() });
+      const todayData = await todayRes.json();
+      setTodayAttendance(todayData.students || {});
 
-      const attColl = collection(db, 'rooms', roomId, 'attendance');
-      const attCollSnap = await getDocs(attColl);
-      const rows = [];
-      attCollSnap.forEach(sd => {
-        const d = sd.data();
-        rows.push({ date: sd.id, count: Object.keys(d.students || {}).length, students: d.students || {} });
-      });
-      rows.sort((a, b) => b.date.localeCompare(a.date));
-      setHistory(rows);
+      const histRes = await fetch(`/api/attendance/${roomId}`, { headers: apiAuth() });
+      const histData = await histRes.json();
+      setHistory(histData.history || []);
     } catch (e) {
       console.error('Failed to load attendance', e);
     }
@@ -57,8 +50,11 @@ export default function AttendanceModal({ roomId, provider, onClose }) {
       merged[u.userId] = { name: u.name, joinedAt: new Date().toISOString() };
     });
     try {
-      const attRef = doc(db, 'rooms', roomId, 'attendance', todayKey());
-      await setDoc(attRef, { date: todayKey(), students: merged, updatedAt: new Date().toISOString() });
+      await fetch(`/api/attendance/${roomId}/${todayKey()}`, {
+        method: 'POST',
+        headers: apiAuth(),
+        body: JSON.stringify({ students: merged })
+      });
       setTodayAttendance(merged);
       await load();
       alert(`Marked ${currentUsers.length} present student(s) for today.`);

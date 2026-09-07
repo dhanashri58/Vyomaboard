@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, GraduationCap, PencilRuler, ClipboardCheck, ShieldCheck, UserX, Table2 } from 'lucide-react';
 import { loadProfile, profileComplete } from '../lib/examProfile';
 import ProfileSetupModal from './ProfileSetupModal';
@@ -14,8 +12,9 @@ export default function ExamWindowModal({ roomId, examName, onClose, onEdit }) {
   useEffect(() => {
     const loadFields = async () => {
       try {
-        const snap = await getDoc(doc(db, 'rooms', roomId));
-        const exam = snap.exists() ? snap.data().exam : null;
+        const res = await fetch(`/api/rooms/${roomId}`);
+        const data = await res.json();
+        const exam = data.success ? (data.room?.meta?.exam || null) : null;
         setAuthFields((exam && Array.isArray(exam.authFields)) ? exam.authFields : []);
       } catch (e) {
         console.error('Failed to load exam auth fields', e);

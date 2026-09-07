@@ -1,4 +1,5 @@
 process.env.YJS_DISABLE_DOUBLE_IMPORT_CHECK = 'true';
+delete process.env.YPERSISTENCE;
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import sqlite3 from 'sqlite3';
 import https from 'https';
+import http from 'http';
 import AdmZip from 'adm-zip';
 import { exec, spawn, execFile } from 'child_process';
 import util from 'util';
@@ -23,10 +25,6 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import cron from 'node-cron';
 import { z } from 'zod';
-import { initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-
-initializeApp({ projectId: 'sync-nexus-1a92b' });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production';
 if (JWT_SECRET === 'super-secret-key-change-in-production') {
@@ -76,11 +74,32 @@ db.serialize(() => {
     hostName TEXT,
     hostId TEXT,
     parentId TEXT,
+    kind TEXT DEFAULT 'board',
+    meta TEXT DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS attendance (
+    room_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    name TEXT,
+    manual INTEGER DEFAULT 0,
+    auto INTEGER DEFAULT 0,
+    joined_at TEXT,
+    PRIMARY KEY (room_id, date, student_id)
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS submissions (
+    room_id TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (room_id, student_id)
   )`);
 });
 
-// Migrate older databases: add username/role columns if missing, then index them.
+// Migrate older databases: add missing columns if existing SQLite DB was created with older schema
 db.all(`PRAGMA table_info(users)`, (migErr, rows) => {
   if (migErr) return console.error('Migration check failed:', migErr);
   const names = rows.map(r => r.name);
@@ -94,6 +113,25 @@ db.all(`PRAGMA table_info(users)`, (migErr, rows) => {
   addColumn('username', 'TEXT');
   addColumn('role', 'TEXT');
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL`);
+});
+
+// Migrate rooms table if it exists without new columns
+db.all(`PRAGMA table_info(rooms)`, (migErr, rows) => {
+  if (migErr || !rows) return;
+  const names = rows.map(r => r.name);
+  const addCol = (col, def) => {
+    if (!names.includes(col)) {
+      db.run(`ALTER TABLE rooms ADD COLUMN ${col} ${def}`, (alterErr) => {
+        if (alterErr) console.error(`Migration failed to add rooms.${col}:`, alterErr);
+      });
+    }
+  };
+  addCol('hostName', 'TEXT');
+  addCol('hostId', 'TEXT');
+  addCol('parentId', 'TEXT');
+  addCol('kind', "TEXT DEFAULT 'board'");
+  addCol('meta', "TEXT DEFAULT '{}'");
+  addCol('created_at', 'DATETIME');
 });
 
 // Migrate annotations table if it uses old schema
@@ -133,39 +171,12 @@ const roomSchema = z.object({
   hostId: z.string().optional()
 });
 
-// Auth Endpoints
-app.post('/api/auth/google', express.json(), async (req, res) => {
-  const { email, displayName, uid, idToken } = req.body;
-  if (!email || !displayName || !uid || !idToken) return res.status(400).json({ error: 'Invalid Google payload' });
-
-  try {
-    const decodedToken = await getAuth().verifyIdToken(idToken);
-    if (decodedToken.uid !== uid || decodedToken.email !== email) {
-      return res.status(403).json({ error: 'Token mismatch' });
-    }
-  } catch (error) {
-    console.error('Firebase ID token verification failed:', error);
-    return res.status(401).json({ error: 'Unauthorized payload' });
-  }
-
-  db.get(`SELECT * FROM users WHERE email = ?`, [email], (err, user) => {
-    if (err) return res.status(500).json({ error: err.message });
-    
-    if (user) {
-      // User exists, log them in
-      const token = jwt.sign({ id: user.id, name: user.name, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-      return res.json({ success: true, token, user: { id: user.id, name: user.name, email: user.email } });
-    } else {
-      // User doesn't exist, create account with a dummy hash
-      const dummyHash = 'google-auth-no-password';
-      db.run(`INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)`, [displayName, email, dummyHash], function(err2) {
-        if (err2) return res.status(500).json({ error: err2.message });
-        const token = jwt.sign({ id: this.lastID, name: displayName, email }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ success: true, token, user: { id: this.lastID, name: displayName, email } });
-      });
-    }
-  });
+// Health Check Endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
 });
+
+// Auth Endpoints
 
 app.post('/api/auth/account', express.json(), (req, res) => {
   const { username, email, password } = req.body;
@@ -343,7 +354,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      connectSrc: ["'self'", "https://localhost:3001", "https://localhost:3002", "wss://localhost:3001", "wss://localhost:3002"],
+      connectSrc: ["'self'", "https://localhost:3001", "https://localhost:3002", "wss://localhost:3001", "wss://localhost:3002", "http://localhost:3001", "http://localhost:3002", "ws://localhost:3001", "ws://localhost:3002"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"],
@@ -352,7 +363,7 @@ app.use(helmet({
   }
 }));
 
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'https://localhost:5173,https://localhost:4173,http://localhost:5173,http://localhost:4173')
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'https://localhost:5173,https://localhost:4173,http://localhost:5173,http://localhost:4173,http://localhost:5174,https://localhost:5174')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
@@ -704,10 +715,33 @@ app.post('/api/rooms', authenticateToken, express.json(), (req, res) => {
   const { hostName, hostId, name: requestedName } = result.data;
   const roomId = 'room-' + Math.random().toString(36).substring(2, 9);
   const roomName = requestedName || `Untitled Workspace`;
+  const kind = req.body.kind || 'board';
+  const parentId = req.body.parentId || null;
+  const meta = req.body.meta ? JSON.stringify(req.body.meta) : '{}';
   
-  db.run(`INSERT INTO rooms (id, name, hostName, hostId) VALUES (?, ?, ?, ?)`, [roomId, roomName, hostName || 'Anonymous', hostId], (err) => {
+  db.run(`INSERT INTO rooms (id, name, hostName, hostId, kind, parentId, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [roomId, roomName, hostName || 'Anonymous', hostId, kind, parentId, meta, new Date().toISOString()], (err) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
-    res.json({ success: true, roomId, name: roomName, hostName, hostId });
+    res.json({ success: true, roomId, name: roomName, hostName, hostId, kind, parentId });
+  });
+});
+
+app.get('/api/rooms', (req, res) => {
+  const { hostId, parentId, kind } = req.query;
+  let sql = 'SELECT * FROM rooms WHERE 1=1';
+  const params = [];
+  if (hostId) { sql += ' AND hostId = ?'; params.push(hostId); }
+  if (parentId) { sql += ' AND parentId = ?'; params.push(parentId); }
+  if (kind) { sql += ' AND kind = ?'; params.push(kind); }
+  sql += ' ORDER BY created_at DESC';
+
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    const rooms = (rows || []).map(r => {
+      try { r.meta = JSON.parse(r.meta || '{}'); } catch (e) { r.meta = {}; }
+      return r;
+    });
+    res.json({ success: true, rooms });
   });
 });
 
@@ -715,7 +749,24 @@ app.get('/api/rooms/:id', (req, res) => {
   db.get(`SELECT * FROM rooms WHERE id = ?`, [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
     if (!row) return res.status(404).json({ success: false, error: 'Room not found' });
+    // Parse meta JSON
+    try { row.meta = JSON.parse(row.meta || '{}'); } catch (e) { row.meta = {}; }
     res.json({ success: true, room: row });
+  });
+});
+
+// PATCH: update room metadata (exam config, classMeta, roster, etc.)
+app.patch('/api/rooms/:id', authenticateToken, express.json({ limit: '10mb' }), (req, res) => {
+  const roomId = req.params.id;
+  db.get(`SELECT meta FROM rooms WHERE id = ?`, [roomId], (err, row) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    let current = {};
+    try { current = JSON.parse(row?.meta || '{}'); } catch (e) {}
+    const merged = Object.assign({}, current, req.body);
+    db.run(`UPDATE rooms SET meta = ? WHERE id = ?`, [JSON.stringify(merged), roomId], (e2) => {
+      if (e2) return res.status(500).json({ success: false, error: e2.message });
+      res.json({ success: true });
+    });
   });
 });
 
@@ -725,12 +776,8 @@ app.delete('/api/rooms/:id', authenticateToken, (req, res) => {
   // Check if room is empty by checking commsRooms
   let isEmpty = true;
   if (commsRooms[roomId]) {
-    // Check if there are any active connections
     for (const client of commsRooms[roomId]) {
-      if (client.readyState === 1) {
-        isEmpty = false;
-        break;
-      }
+      if (client.readyState === 1) { isEmpty = false; break; }
     }
   }
   
@@ -744,22 +791,150 @@ app.delete('/api/rooms/:id', authenticateToken, (req, res) => {
   });
 });
 
-function startServer(port) {
-  try {
-    const options = {
-      key: fs.readFileSync(path.join(__dirname, '../localhost+2-key.pem')),
-      cert: fs.readFileSync(path.join(__dirname, '../localhost+2.pem'))
-    };
-    
-    const serverInstance = https.createServer(options, app).listen(port, () => {
-      console.log(`Backend server running on HTTPS port ${port} (All interfaces)`);
-      serverInstance.on('upgrade', upgradeHandler);
+// ── Attendance Endpoints ──────────────────────────────────────────────────────
+
+// GET today's attendance for a room+date
+app.get('/api/attendance/:roomId/:date', authenticateToken, (req, res) => {
+  const { roomId, date } = req.params;
+  db.all(`SELECT student_id, name, manual, auto, joined_at FROM attendance WHERE room_id = ? AND date = ?`,
+    [roomId, date], (err, rows) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      const students = {};
+      rows.forEach(r => { students[r.student_id] = { name: r.name, manual: !!r.manual, auto: !!r.auto, joinedAt: r.joined_at }; });
+      res.json({ success: true, students });
     });
-    server = serverInstance;
-  } catch (err) {
-    console.error('Failed to read SSL certificates. Make sure mkcert files exist:', err);
-    process.exit(1);
+});
+
+// GET full attendance history for a room
+app.get('/api/attendance/:roomId', authenticateToken, (req, res) => {
+  const { roomId } = req.params;
+  db.all(`SELECT date, student_id, name, manual, auto, joined_at FROM attendance WHERE room_id = ? ORDER BY date DESC`,
+    [roomId], (err, rows) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      const byDate = {};
+      rows.forEach(r => {
+        if (!byDate[r.date]) byDate[r.date] = {};
+        byDate[r.date][r.student_id] = { name: r.name, manual: !!r.manual, auto: !!r.auto, joinedAt: r.joined_at };
+      });
+      const history = Object.entries(byDate).map(([date, students]) => ({
+        date, count: Object.keys(students).length, students
+      })).sort((a, b) => b.date.localeCompare(a.date));
+      res.json({ success: true, history });
+    });
+});
+
+// POST mark attendance for a room+date (bulk upsert)
+app.post('/api/attendance/:roomId/:date', authenticateToken, express.json(), (req, res) => {
+  const { roomId, date } = req.params;
+  const { students } = req.body;
+  if (!students || typeof students !== 'object') return res.status(400).json({ success: false, error: 'students object required' });
+  
+  const stmt = db.prepare(`INSERT INTO attendance (room_id, date, student_id, name, manual, auto, joined_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(room_id, date, student_id) DO UPDATE SET name=excluded.name, manual=excluded.manual, auto=excluded.auto, joined_at=excluded.joined_at`);
+  
+  Object.entries(students).forEach(([uid, info]) => {
+    stmt.run(roomId, date, uid, info.name || uid, info.manual ? 1 : 0, info.auto ? 1 : 0, info.joinedAt || new Date().toISOString());
+  });
+  stmt.finalize(err => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    res.json({ success: true });
+  });
+});
+
+// ── Submissions Endpoints ─────────────────────────────────────────────────────
+
+// GET all submissions for a room (teacher)
+app.get('/api/submissions/:roomId', authenticateToken, (req, res) => {
+  db.all(`SELECT student_id, data, submitted_at FROM submissions WHERE room_id = ?`, [req.params.roomId], (err, rows) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    const docs = rows.map(r => {
+      let d = {};
+      try { d = JSON.parse(r.data); } catch (e) {}
+      return { uid: r.student_id, ...d, submittedAt: r.submitted_at };
+    });
+    res.json({ success: true, submissions: docs });
+  });
+});
+
+// GET a single student's submission
+app.get('/api/submissions/:roomId/:studentId', (req, res) => {
+  db.get(`SELECT data FROM submissions WHERE room_id = ? AND student_id = ?`,
+    [req.params.roomId, req.params.studentId], (err, row) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      if (!row) return res.status(404).json({ success: false, error: 'Not found' });
+      let d = {};
+      try { d = JSON.parse(row.data); } catch (e) {}
+      res.json({ success: true, submission: d });
+    });
+});
+
+// POST / upsert a student submission
+app.post('/api/submissions/:roomId/:studentId', express.json({ limit: '10mb' }), (req, res) => {
+  const { roomId, studentId } = req.params;
+  const data = JSON.stringify(req.body);
+  db.run(`INSERT INTO submissions (room_id, student_id, data, submitted_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(room_id, student_id) DO UPDATE SET data=excluded.data, submitted_at=CURRENT_TIMESTAMP`,
+    [roomId, studentId, data], (err) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true });
+    });
+});
+
+// PATCH a submission (for grading)
+app.patch('/api/submissions/:roomId/:studentId', authenticateToken, express.json({ limit: '10mb' }), (req, res) => {
+  const { roomId, studentId } = req.params;
+  db.get(`SELECT data FROM submissions WHERE room_id = ? AND student_id = ?`, [roomId, studentId], (err, row) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    let current = {};
+    try { current = JSON.parse(row?.data || '{}'); } catch (e) {}
+    const merged = Object.assign({}, current, req.body);
+    db.run(`UPDATE submissions SET data = ?, submitted_at = CURRENT_TIMESTAMP WHERE room_id = ? AND student_id = ?`,
+      [JSON.stringify(merged), roomId, studentId], (e2) => {
+        if (e2) return res.status(500).json({ success: false, error: e2.message });
+        res.json({ success: true });
+      });
+  });
+});
+
+// DELETE a submission
+app.delete('/api/submissions/:roomId/:studentId', authenticateToken, (req, res) => {
+  db.run(`DELETE FROM submissions WHERE room_id = ? AND student_id = ?`,
+    [req.params.roomId, req.params.studentId], (err) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true });
+    });
+});
+
+function startServer(port) {
+  const keyPath = path.join(__dirname, '../localhost+2-key.pem');
+  const certPath = path.join(__dirname, '../localhost+2.pem');
+  
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    try {
+      const options = {
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath)
+      };
+      const serverInstance = https.createServer(options, app).listen(port, () => {
+        console.log(`Backend server running on HTTPS port ${port}`);
+        serverInstance.on('upgrade', upgradeHandler);
+      });
+      server = serverInstance;
+      return;
+    } catch (err) {
+      console.warn('SSL cert load failed, falling back to HTTP:', err.message);
+    }
+  } else {
+    console.warn('SSL certs not found — starting in plain HTTP mode (localhost only).');
   }
+
+  // HTTP fallback
+  const serverInstance = http.createServer(app).listen(port, () => {
+    console.log(`Backend server running on HTTP port ${port}`);
+    serverInstance.on('upgrade', upgradeHandler);
+  });
+  server = serverInstance;
 }
 
 server = startServer(DEFAULT_PORT);

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
 import { ArrowLeft, BarChart3, Users, Trophy, CheckCircle2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend } from 'recharts';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
 
 export default function Analytics() {
   const { id } = useParams();
@@ -15,15 +15,13 @@ export default function Analytics() {
   useEffect(() => {
     const load = async () => {
       try {
-        const roomRef = doc(db, 'rooms', id);
-        const roomSnap = await getDoc(roomRef);
-        if (roomSnap.exists()) setRoomInfo(roomSnap.data());
+        const roomRes = await fetch(`/api/rooms/${id}`);
+        const roomData = await roomRes.json();
+        if (roomData.success) setRoomInfo(roomData.room?.meta || roomData.room);
 
-        const subsRef = collection(db, 'rooms', id, 'submissions');
-        const subsSnap = await getDocs(subsRef);
-        const rows = [];
-        subsSnap.forEach(sd => rows.push({ uid: sd.id, ...sd.data() }));
-        setSubmissions(rows);
+        const subRes = await fetch(`/api/submissions/${id}`, { headers: apiAuth() });
+        const subData = await subRes.json();
+        setSubmissions(subData.submissions || []);
       } catch (e) {
         console.error('Failed to load analytics', e);
       } finally {

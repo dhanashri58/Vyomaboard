@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, UserPlus, Trash2, CheckCircle2, Clock, Download, Upload, ChevronRight, FileSpreadsheet } from 'lucide-react';
+
+const apiAuth = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` });
+const todayKey = () => new Date().toISOString().slice(0, 10);
 
 export default function RosterModal({ roomId, onClose }) {
   const [roster, setRoster] = useState([]);
@@ -23,26 +24,24 @@ export default function RosterModal({ roomId, onClose }) {
 
   const load = async () => {
     try {
-      const roomRef = doc(db, 'rooms', roomId);
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
-        setRoster(snap.data().roster || []);
+      const roomRes = await fetch(`/api/rooms/${roomId}`);
+      const roomData = await roomRes.json();
+      if (roomData.success) {
+        setRoster(roomData.room?.meta?.roster || []);
       }
-      const subsRef = collection(db, 'rooms', roomId, 'submissions');
-      const subsSnap = await getDocs(subsRef);
+
+      const subRes = await fetch(`/api/submissions/${roomId}`, { headers: apiAuth() });
+      const subData = await subRes.json();
       const map = {};
-      subsSnap.forEach(sd => {
-        const d = sd.data();
-        map[sd.id] = { submittedAt: d.submittedAt, obtained: d.obtainedMarks, total: d.totalMarks, status: d.status };
+      (subData.submissions || []).forEach(s => {
+        map[s.uid] = { submittedAt: s.submittedAt, obtained: s.obtainedMarks, total: s.totalMarks, status: s.status };
       });
       setSubmissions(map);
 
       // Load attendance
-      const attRef = doc(db, 'rooms', roomId, 'attendance', todayKey());
-      const attSnap = await getDoc(attRef);
-      if (attSnap.exists()) {
-        setTodayAttendance(attSnap.data().students || {});
-      }
+      const attRes = await fetch(`/api/attendance/${roomId}/${todayKey()}`, { headers: apiAuth() });
+      const attData = await attRes.json();
+      setTodayAttendance(attData.students || {});
     } catch (e) {
       console.error('Failed to load roster', e);
     }
@@ -52,8 +51,10 @@ export default function RosterModal({ roomId, onClose }) {
 
   const saveRoster = async (next) => {
     try {
-      const roomRef = doc(db, 'rooms', roomId);
-      await setDoc(roomRef, { roster: next }, { merge: true });
+      await fetch(`/api/rooms/${roomId}`, {
+        method: 'PATCH', headers: apiAuth(),
+        body: JSON.stringify({ roster: next })
+      });
       setRoster(next);
     } catch (e) {
       alert('Failed to save roster: ' + e.message);

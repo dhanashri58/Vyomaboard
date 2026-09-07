@@ -1,6 +1,4 @@
 import React, { useState } from 'react';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X, Save, User, ChevronDown } from 'lucide-react';
 import { DESIGNATIONS, DOMAINS, YEARS, DIVISIONS, loadProfile, saveProfile, saveCustomFieldsMeta } from '../lib/examProfile';
 
@@ -41,18 +39,7 @@ export default function ProfileSetupModal({ onClose, onSaved, authFields = [], r
       saveProfile(form);
       localStorage.setItem('examFields_' + roomId, JSON.stringify(custom));
       saveCustomFieldsMeta(roomId, authFields);
-      const userEmail = localStorage.getItem('userEmail');
-      if (userEmail) {
-        try {
-          const customAnswers = authFields
-            .filter(f => (custom[f.id] || '').trim())
-            .map(f => ({ id: f.id, label: f.label, value: String(custom[f.id]).trim() }));
-          await setDoc(doc(db, 'users', userEmail), { profile: { ...form, name: localStorage.getItem('userName') || '' } }, { merge: true });
-          await setDoc(doc(db, 'users', userEmail), { examAnswers: { [roomId]: customAnswers } }, { merge: true });
-        } catch (e) {
-          console.warn('Could not persist profile to Firestore', e);
-        }
-      }
+      // Profile is persisted locally — no Firestore sync needed
       onSaved && onSaved();
       onClose && onClose();
     } catch (e) {
